@@ -85,23 +85,15 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="cuda_functions_color.cu" />
-    <CudaCompile Include="cuda_functions_gray.cu" />
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="constant.h" />
-    <ClInclude Include="cpu_functions.h" />
-    <ClInclude Include="cuda_functions_color.h" />
-    <ClInclude Include="cuda_functions_gray.h" />
     <ClInclude Include="helper.h" />
-    <ClInclude Include="host_cuda_functions.h" />
     <ClInclude Include="image_helper.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="cpu_functions.cpp" />
     <ClCompile Include="helper.cpp" />
-    <ClCompile Include="host_cuda_functions.cpp" />
     <ClCompile Include="image_helper.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

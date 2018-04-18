@@ -21,10 +21,10 @@ void show_filter();
 
 void choise_filter();
 
-void fill_filter(float new_filter[3][3]);
+void fill_filter(const float new_filter[3][3]);
 
 void choise_image_and_format(char** input, char** cpu, char** gpu);
 
-char* get_path(char* folder, char* file);
+char* get_filename(const char* folder, const char* file, const char* format);
 
-char* get_filename(char* file, char* format);
+int cin_int(int min = 0, int max = 1);

@@ -6,7 +6,6 @@
 
 #include <cmath>
 
-
 using namespace std;
 
 double gpu_convert_image(uint8_t* input, uint8_t* result, unsigned int width, unsigned int height, unsigned int channels);
@@ -633,7 +632,7 @@ int menu()
 		free(input_image);
 
 		cout << "Convert new image? 1 - yes, 0 - no" << endl;
-		cin >> image_choise;
+		image_choise = cin_int();
 	}
 	return 0;
 }
@@ -667,15 +666,15 @@ int image_processing_menu(const char* input_file, const char* cpu_result_file, c
 		cout << endl << "CPU processing" << endl;
 		cout << "CPU time " << cpu_convert_image(input_image, cpu_image, width, height, channels) << endl;
 
-		cout << endl << "Use cuda stream? 1-yes" << endl;
-		cin >> choise;
+		cout << endl << "Use cuda stream? 1-yes, 0-no" << endl;
+		choise = cin_int();
 
 		if (choise) {
 			choise = 0;
 			if (channels == 3)
 			{
-				cout << "Use cuda stream and cpu? 1-yes" << endl;
-				cin >> choise;
+				cout << "Use cuda stream and cpu? 1-yes, 0-no" << endl;
+				choise = cin_int();
 			}
 			cout << endl << "GPU processing" << endl;
 			cout << "Time " << (choise == 1 ?
@@ -718,7 +717,7 @@ int image_processing_menu(const char* input_file, const char* cpu_result_file, c
 		free(gpu_image);
 
 		cout << "Convert image again? 1 - yes, 0 - no" << endl;
-		cin >> choise;
+		choise = cin_int();
 	}
 	return 0;
 }
@@ -728,11 +727,11 @@ void change_filter()
 	show_filter();
 	int choise = 0;
 	cout << "Change filter? 1-yes, 0-no" << endl;
-	cin >> choise;
+	choise = cin_int();
 	if (!choise)
 		return;
 	cout << "Select: 1 - enter yourself, 0 - select from specified" << endl;
-	cin >> choise;
+	choise = cin_int();
 	if (!choise)
 		choise_filter();
 	else
@@ -740,7 +739,7 @@ void change_filter()
 			for (int j = 0; j < 3; j++)
 			{
 				cout << "Enter the number" << endl;
-				cin >> filter[i][j];
+				filter[i][j] = cin_int(0, 0);
 			}
 
 	show_filter();
@@ -760,7 +759,7 @@ void show_filter()
 	cout << endl;
 }
 
-void fill_filter(float new_filter[3][3])
+void fill_filter(const float new_filter[3][3])
 {
 	for (int i = 0; i < 3; i++)
 	{

@@ -13,7 +13,7 @@
 #define Xdim 32
 #define Ydim 16
 
-#define CountStream 4
+#define CountStream 2
 
 //mini matrix
 float filter[3][3] = { { -1,-1,-1 },{ -1,9,-1 },{ -1,-1,-1 } };
