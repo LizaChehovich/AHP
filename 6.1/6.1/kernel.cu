@@ -24,11 +24,6 @@ __device__ void gray_center_kernel(const int* input, int* result, const int widt
 	const int absX = blockIdx.x * blockDim.x + threadIdx.x;
 	const int absY = blockIdx.y * blockDim.y + threadIdx.y;
 
-	const int absXinByte = absX * sizeof(int);
-
-	const int Width = width + 2 * sizeof(int);
-	const int Height = heigth + 2;
-
 	__shared__ int buf[count_column][count_row];
 
 	//load data in shared memory
@@ -163,12 +158,6 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 	const int pitch_in_int = pitch / sizeof(int);
 	const int absX = (blockIdx.x * blockDim.x)*channels + threadIdx.x;
 	const int absY = blockIdx.y * blockDim.y + threadIdx.y;
-
-	const int absXinByte = absX * sizeof(int);
-	const int blockDimXinByte = blockDim.x * sizeof(int);
-
-	const int Width = (width * channels + 2 * sizeof(int));
-	const int Height = heigth + 2;
 
 	__shared__ int buf[count_column][count_row];
 
