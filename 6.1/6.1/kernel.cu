@@ -190,6 +190,7 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 	const int absY = blockIdx.y * blockDim.y + threadIdx.y;
 
 	__shared__ int buf[count_column][count_row];
+	//__shared__ int res[Ydim][Xdim*channels];
 
 	//загрузка данны в разделяемую память
 	//каждая нить загружает 3 раза по 1 int - транзакции
@@ -220,20 +221,19 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 
 	__syncthreads();
 
-	int val;
 	float sum;
+	int val;
+	int bytePosY = threadIdx.y + 1;
 
 	//3 раза обрабатываем по 4 байта
 	for (int c = 0; c < channels; c++)
 	{
-
 		val = 0;
 
-		int bytePosY = threadIdx.y + 1;
-		int bytePosX = (threadIdx.x + 1 + c*blockDim.x) * sizeof(int);
 
 		for (int k = 0; k < 4; k++)
 		{
+			const int bytePosX = (threadIdx.x + 1 + c*blockDim.x) * sizeof(int) + k;
 			sum = 0;
 
 			for (int i = -1; i < 2; i++)
@@ -247,10 +247,12 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 			if (sum < 0) sum = 0;
 			if (sum > 255) sum = 255;
 
+			//((byte*)&(res[threadIdx.y][threadIdx.x + c*blockDim.x]))[k] = sum;
 			((byte*)&val)[k] = sum;
-			bytePosX++;
+			//bytePosX++;
 		}
 
+		//result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = res[threadIdx.y][threadIdx.x + c*blockDim.x];
 		result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = val;
 	}
 }
@@ -272,6 +274,7 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 	const int Height = heigth + 2;
 
 	__shared__ int buf[count_column][count_row];
+	//__shared__ int res[Ydim][Xdim*channels];
 
 	//load data in shared memory
 
@@ -303,20 +306,21 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 
 	__syncthreads();
 
-	int val;
 	float sum;
+	int val;
+	const int bytePosY = threadIdx.y + 1;
 	int offset;
 
 	for (int c = 0; c < channels; c++)
 	{
 
+		//res[threadIdx.y][threadIdx.x + c*blockDim.x] = 0;
 		val = 0;
-
-		int bytePosY = threadIdx.y + 1;
-		int bytePosX = (threadIdx.x + 1 + c*blockDim.x) * sizeof(int);
+		
 
 		for (int k = 0; k < 4; k++)
 		{
+			const int bytePosX = (threadIdx.x + 1 + c*blockDim.x) * sizeof(int) + k;
 			if (absY >= Height || absXinByte + c*blockDim.x * sizeof(int) + k >= width* channels)
 				break;
 			sum = 0;
@@ -326,7 +330,7 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 				for (int j = -1; j < 2; j++)
 				{
 					offset = j*channels;
-					//Собстрвенно, если нвм нужен сосед крайнего правого - берём крайний правый
+					//Собстрвенно, если нам нужен сосед крайнего правого - берём крайний правый
 					if (absXinByte + c*blockDim.x * sizeof(int) + k >= (width - 1)*channels&& offset > 0)
 						offset = 0;
 					sum += ((byte*)buf[bytePosY + i])[bytePosX + offset] * d_filter[i + 1][j + 1];
@@ -336,8 +340,9 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 			if (sum < 0) sum = 0;
 			if (sum > 255) sum = 255;
 
+			//((byte*)&(res[threadIdx.y][threadIdx.x + c*blockDim.x]))[k] = sum;
 			((byte*)&val)[k] = sum;
-			bytePosX++;
+			//bytePosX++;
 		}
 
 		if (absY < heigth && absXinByte + c * blockDimXinByte < width * channels)
