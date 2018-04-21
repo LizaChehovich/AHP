@@ -98,3 +98,25 @@ int cin_int(int min, int max)
 	}
 	return val;
 }
+
+float cin_float()
+{
+	float val;
+	while (true)
+	{
+		cin >> val;
+		if (cin.fail())
+		{
+			if (cin.bad())
+			{
+				cout << "Error in cin " << endl;
+				break;
+			}
+			cin.clear();
+			while (cin.get() != '\n');
+		}
+		else
+			break;
+	}
+	return val;
+}

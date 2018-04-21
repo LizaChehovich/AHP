@@ -1,23 +1,27 @@
 #include "helper.h"
 #include "image_helper.h"
 #include "constant.h"
-//#include "cpu_functions.h"
-//#include "host_cuda_functions.h"
 
 #include <cmath>
+#include "cuda_profiler_api.h"
 
 using namespace std;
 
+//запуск фильтрации изображения на устройстве
 double gpu_convert_image(uint8_t* input, uint8_t* result, unsigned int width, unsigned int height, unsigned int channels);
+
+//запуск фильтрации изображения на устройстве в нескольких стримах
 double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int width, unsigned int height, unsigned int channels);
 
+//фильтрация изображения на хосте
 double cpu_convert_image(uint8_t* input, uint8_t* result, unsigned int width, unsigned int height, unsigned int chnnels);
 
+//фильтрация цветного изображения при помощи разложения на матрицы отдельных цветов и обработки на устройстве
 double cpu_and_gpu_convert_image(uint8_t* input, uint8_t* result, unsigned int width, unsigned int height, unsigned int chnnels);
 
+//ядро обработки центральных блоков чёрно-белого изображения
 __device__ void gray_center_kernel(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch)
 {
-
 	const int count_row = Xdim + 2;
 	const int count_column = Ydim + 2;
 	const int pitch_in_int = pitch / sizeof(int);
@@ -26,18 +30,31 @@ __device__ void gray_center_kernel(const int* input, int* result, const int widt
 
 	__shared__ int buf[count_column][count_row];
 
-	//load data in shared memory
-
+	//загрузка данных в разделяемую память
+	//основная часть - транзакции
 	buf[threadIdx.y][threadIdx.x] = input[absY*pitch_in_int + absX];
-
+	//две последнии строки - транзакции
 	if (threadIdx.y < 2)
 		buf[threadIdx.y + blockDim.y][threadIdx.x] = input[(absY + blockDim.y)*pitch_in_int + absX];
-
+	//два столбца 
 	if (threadIdx.x < 2)
 		buf[threadIdx.y][count_row - 2 + threadIdx.x] = input[absY*pitch_in_int + absX + blockDim.x];
-
+	//квадрат 2*2 в правом нижнем углу
 	if (threadIdx.y < 2  && threadIdx.x < 2)
 		buf[threadIdx.y + blockDim.y][count_row - 2 + threadIdx.x] = input[(absY + blockDim.y)*pitch_in_int + absX + blockDim.x];
+
+	//синхронизация потоков блока
+	__syncthreads();
+
+	//заполнение граничных левых бит в блоках, обрабатывающих левую границу
+	//конфликт обращения к разделяемой памяти 16 порядка
+	//чтобы избежать конфликта, можно запустить обращение в цикле, но что так, что так будем работать с ячейками каждой строки в отдельности
+	if (blockIdx.x == 0 && threadIdx.x == 0)
+	{
+		buf[threadIdx.y][threadIdx.x] = buf[threadIdx.y][threadIdx.x + 1] << 24;
+		if (threadIdx.y < 2)
+			buf[threadIdx.y + blockDim.y][threadIdx.x] = buf[threadIdx.y + blockDim.y][threadIdx.x + 1] << 24;
+	}
 
 	__syncthreads();
 
@@ -50,6 +67,8 @@ __device__ void gray_center_kernel(const int* input, int* result, const int widt
 	{
 		sum = 0;
 
+		//я не совсем понимаю, где здесь конфликт обращения к разделяемой памяти,
+		//т.е. он, вроде как, есть (профайлер показывает эффективность обращения 33%), но я не могу понять из-за чего
 		for (int i = -1; i < 2; i++)
 		{
 			for (int j = -1; j < 2; j++)
@@ -65,9 +84,11 @@ __device__ void gray_center_kernel(const int* input, int* result, const int widt
 		bytePosX++;
 	}
 
+	//записываем в память результаты работы всего варпа - транцакция
 	result[absY*res_pitch / sizeof(int) + absX] = val;
 }
 
+//ядро обработки крайних правых и нижних блоков чёрно-белого изображения
 __device__ void gray_frame_kernel(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch)
 {
 	const int count_row = Xdim + 2;
@@ -80,6 +101,8 @@ __device__ void gray_frame_kernel(const int* input, int* result, const int width
 
 	const int Width = width + 2 * sizeof(int);
 	const int Height = heigth + 2;
+	//количество int, занятых изображением
+	const int image_width = blockDim.x - (gridDim.x*blockDim.x * sizeof(int) - width) / sizeof(int);
 
 	__shared__ int buf[count_column][count_row];
 
@@ -96,6 +119,22 @@ __device__ void gray_frame_kernel(const int* input, int* result, const int width
 
 	if (threadIdx.y < 2 && (absY + blockDim.y) < Height && threadIdx.x < 2 && ((absX + blockDim.x) * sizeof(int)) < Width)
 		buf[threadIdx.y + blockDim.y][count_row - 2 + threadIdx.x] = input[(absY + blockDim.y)*pitch_in_int + absX + blockDim.x];
+
+	__syncthreads();
+
+	//дублируем последний байт изображения в соседний int
+	if (blockIdx.x == gridDim.x-1 && threadIdx.x == 0) {
+		buf[threadIdx.y][image_width +1] = buf[threadIdx.y][image_width]>>24;
+		if (threadIdx.y < 2)
+			buf[threadIdx.y + blockDim.y][image_width +1] = buf[threadIdx.y + blockDim.y][image_width]>>24;
+	}
+
+	if (blockIdx.x == 0 && threadIdx.x == 0)
+	{
+		buf[threadIdx.y][threadIdx.x] = buf[threadIdx.y][threadIdx.x + 1] << 24;
+		if (threadIdx.y<2)
+			buf[threadIdx.y + blockDim.y][threadIdx.x] = buf[threadIdx.y + blockDim.y][threadIdx.x + 1] << 24;
+	}
 
 	__syncthreads();
 
@@ -131,6 +170,7 @@ __device__ void gray_frame_kernel(const int* input, int* result, const int width
 	}
 }
 
+//функция разделения блоков на центральные и граничные для чёрно-белого изображения
 __global__ void cuda_gray_processing(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch)
 {
 	if (blockIdx.x == gridDim.x - 1 || blockIdx.y == gridDim.y - 1)
@@ -139,17 +179,7 @@ __global__ void cuda_gray_processing(const int* input, int* result, const int wi
 		gray_center_kernel(input, result, width, heigth, pitch, res_pitch);
 }
 
-__global__ void cuda_gray_processing(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch, const int frame)
-{
-	if (frame)
-		if (blockIdx.x == gridDim.x - 1 || blockIdx.y == gridDim.y - 1)
-			gray_frame_kernel(input, result, width, heigth, pitch, res_pitch);
-		else
-			gray_center_kernel(input, result, width, heigth, pitch, res_pitch);
-	else
-		gray_center_kernel(input, result, width, heigth, pitch, res_pitch);
-}
-
+//ядро обработки центральных блоков цветного изображения
 __device__ void color_center_kernel(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch)
 {
 	const int channels = 3;
@@ -161,25 +191,39 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 
 	__shared__ int buf[count_column][count_row];
 
-	//load data in shared memory
-
+	//загрузка данны в разделяемую память
+	//каждая нить загружает 3 раза по 1 int - транзакции
 	for (int i = 0; i < channels; i++) {
 		buf[threadIdx.y][threadIdx.x + blockDim.x*i] = input[absY*pitch_in_int + absX + blockDim.x*i];
 
-		buf[threadIdx.y + blockDim.y][threadIdx.x + blockDim.x*i] = input[(absY + blockDim.y)*pitch_in_int + absX + blockDim.x*i];
+		if (threadIdx.y < 2)
+			buf[threadIdx.y + blockDim.y][threadIdx.x + blockDim.x*i] = input[(absY + blockDim.y)*pitch_in_int + absX + blockDim.x*i];
 	}
 
+	//2 строки
 	if (threadIdx.x < 2)
 		buf[threadIdx.y][count_row - 2 + threadIdx.x] = input[absY*pitch_in_int + absX + blockDim.x*channels];
 
+	//квадрат 2*2
 	if (threadIdx.y < 2 && threadIdx.x < 2)
 		buf[threadIdx.y + blockDim.y][count_row - 2 + threadIdx.x] = input[(absY + blockDim.y)*pitch_in_int + absX + blockDim.x*channels];
+
+	__syncthreads();
+
+	//заполняем границы левых крайних блоков
+	if (blockIdx.x == 0 && threadIdx.x == 0)
+	{
+		buf[threadIdx.y][threadIdx.x] = buf[threadIdx.y][threadIdx.x + 1] << 8;
+		if (threadIdx.y < 2)
+			buf[threadIdx.y + blockDim.y][threadIdx.x] = buf[threadIdx.y + blockDim.y][threadIdx.x + 1] << 8;
+	}
 
 	__syncthreads();
 
 	int val;
 	float sum;
 
+	//3 раза обрабатываем по 4 байта
 	for (int c = 0; c < channels; c++)
 	{
 
@@ -196,7 +240,7 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 			{
 				for (int j = -1; j < 2; j++)
 				{
-					sum += ((byte*)buf[bytePosY + i])[bytePosX + j*channels] * d_filter[i + 1][j + 1];
+					sum += ((byte*)buf[bytePosY + i])[bytePosX + j * channels] * d_filter[i + 1][j + 1];
 				}
 			}
 			sum = round(sum);
@@ -211,6 +255,7 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 	}
 }
 
+//ядро обработки крайних правых и нижних блоков цветного изображения
 __device__ void color_frame_kernel(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch)
 {
 	const int channels = 3;
@@ -246,8 +291,21 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 
 	__syncthreads();
 
+	//здесь нет смысла переносить значения крайнего правого пикселя в соседнюю ячейку, т.к. в зависимости от размера изображения 
+	//будет варьироваться положения бит итого пикселя в int. Проще два раза учитывать сам пиксель с разными коэффициентами домножения
+
+	if (blockIdx.x == 0 && threadIdx.x == 0)
+	{
+		buf[threadIdx.y][threadIdx.x] = buf[threadIdx.y][threadIdx.x + 1] << 8;
+		if (threadIdx.y < 2)
+			buf[threadIdx.y + blockDim.y][threadIdx.x] = buf[threadIdx.y + blockDim.y][threadIdx.x + 1] << 8;
+	}
+
+	__syncthreads();
+
 	int val;
 	float sum;
+	int offset;
 
 	for (int c = 0; c < channels; c++)
 	{
@@ -259,7 +317,7 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 
 		for (int k = 0; k < 4; k++)
 		{
-			if (absY >= Height && absXinByte + c*blockDim.x * sizeof(int) >= Width)
+			if (absY >= Height || absXinByte + c*blockDim.x * sizeof(int) + k >= width* channels)
 				break;
 			sum = 0;
 
@@ -267,7 +325,11 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 			{
 				for (int j = -1; j < 2; j++)
 				{
-					sum += ((byte*)buf[bytePosY + i])[bytePosX + j*channels] * d_filter[i + 1][j + 1];
+					offset = j*channels;
+					//Собстрвенно, если нвм нужен сосед крайнего правого - берём крайний правый
+					if (absXinByte + c*blockDim.x * sizeof(int) + k >= (width - 1)*channels&& offset > 0)
+						offset = 0;
+					sum += ((byte*)buf[bytePosY + i])[bytePosX + offset] * d_filter[i + 1][j + 1];
 				}
 			}
 			sum = round(sum);
@@ -285,6 +347,7 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 	}
 }
 
+//функция разделения блоков на центральные и граничные для цветного изображения
 __global__ void cuda_color_processing(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch)
 {
 	if (blockIdx.x == gridDim.x - 1 || blockIdx.y == gridDim.y - 1)
@@ -293,29 +356,22 @@ __global__ void cuda_color_processing(const int* input, int* result, const int w
 		color_center_kernel(input, result, width, heigth, pitch, res_pitch);
 }
 
-__global__ void cuda_color_processing(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch, const int frame)
-{
-	if (frame)
-		if (blockIdx.x == gridDim.x - 1 || blockIdx.y == gridDim.y - 1)
-			color_frame_kernel(input, result, width, heigth, pitch, res_pitch);
-		else
-			color_center_kernel(input, result, width, heigth, pitch, res_pitch);
-	else
-		color_center_kernel(input, result, width, heigth, pitch, res_pitch);
-}
-
 int main()
 {
+	cudaProfilerStart();
 	return menu();
+	cudaProfilerStop();
 }
 
 double gpu_convert_image(uint8_t* input, uint8_t* result, unsigned int width, unsigned int height, unsigned int channels)
 {
+	//копируем фильтр в константную память
 	cudaMemcpyToSymbol(d_filter, filter, 9 * sizeof(float), 0, cudaMemcpyHostToDevice);
 
 	uint8_t* dev_input;
 	uint8_t* dev_output;
 	float time = 0;
+	unsigned int Width = width*channels;
 
 	size_t input_pitch;
 	size_t res_pitch;
@@ -328,17 +384,26 @@ double gpu_convert_image(uint8_t* input, uint8_t* result, unsigned int width, un
 
 
 	dim3 threadsPerBlock(Xdim, Ydim);
-	dim3 numBlocks(ceil(((float)width + Xdim - 1) / Xdim / 4), ceil((height + Ydim - 1) / Ydim));
+	dim3 numBlocks(ceil(((float)width ) / Xdim / 4), ceil(((float)height) / Ydim));
 
 	cudaEventRecord(start);
 
-	err = cudaMallocPitch(&dev_input, &input_pitch, (width * channels + 2 * sizeof(int)), height + 2);
+	err = cudaMallocPitch(&dev_input, &input_pitch, (Width + 2 * sizeof(int)), height + 2);
 	if (error(err))		return 0.0;
-	err = cudaMemset2D(dev_input, input_pitch, 0, (width * channels + 2 * sizeof(int)), height + 2);
+	//err = cudaMemset2D(dev_input, input_pitch, 0, (Width + 2 * sizeof(int)), height + 2);
+	//if (error(err))		return 0.0;
+
+	//копируем матрицу с отступами
+	err = cudaMemcpy2D(dev_input + input_pitch + sizeof(int), input_pitch, input, Width, Width * sizeof(uint8_t), height, cudaMemcpyHostToDevice);
 	if (error(err))		return 0.0;
-	err = cudaMemcpy2D(dev_input + input_pitch + sizeof(int), input_pitch, input, width * channels, width * channels * sizeof(uint8_t), height, cudaMemcpyHostToDevice);
+	//копируем в верхнюю строку расширения первую строку изображения
+	err = cudaMemcpy2D(dev_input + sizeof(int), input_pitch, input, Width, Width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice);
 	if (error(err))		return 0.0;
-	err = cudaMallocPitch(&dev_output, &res_pitch, width * channels, height);
+	//копируем в нижнюю строку расширения последнюю строку изображения
+	err = cudaMemcpy2D(dev_input + input_pitch*(height+1) + sizeof(int), input_pitch, input + Width*(height-1), Width, Width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice);
+	if (error(err))		return 0.0;
+
+	err = cudaMallocPitch(&dev_output, &res_pitch, Width, height);
 	if (error(err))		return 0.0;
 
 	if (channels == 3)
@@ -347,7 +412,7 @@ double gpu_convert_image(uint8_t* input, uint8_t* result, unsigned int width, un
 		cuda_gray_processing << <numBlocks, threadsPerBlock >> > (reinterpret_cast<int*>(dev_input), reinterpret_cast<int*>(dev_output), width, height, input_pitch, res_pitch);
 
 
-	err = cudaMemcpy2D(result, width * channels, dev_output, res_pitch, width * channels * sizeof(uint8_t), height, cudaMemcpyDeviceToHost);
+	err = cudaMemcpy2D(result, Width, dev_output, res_pitch, Width* sizeof(uint8_t), height, cudaMemcpyDeviceToHost);
 	if (error(err))		return 0.0;
 
 	cudaEventRecord(end);
@@ -366,6 +431,8 @@ double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int wi
 	cudaMemcpyToSymbol(d_filter, filter, 9 * sizeof(float), 0, cudaMemcpyHostToDevice);
 
 	float time = 0;
+
+	//высота части изображения, обрабатываемой одним потоком
 	int stream_height = ceil(((float)height) / Ydim / CountStream)*Ydim;
 	int Width = width*channels;
 	
@@ -383,6 +450,7 @@ double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int wi
 	uint8_t* dev_input[CountStream];
 	uint8_t* dev_output[CountStream];
 
+	//регистрируем входную и выходные матрицы как пиннед-память
 	err = cudaHostRegister(input, Width*height, cudaHostRegisterPortable);
 	if (error(err))		return 0.0;
 
@@ -391,43 +459,49 @@ double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int wi
 
 	int height_count;
 
-	for(int i = 0; i< CountStream; i++)
+	for (int i = 0; i < CountStream; i++)
+	{
 		err = cudaStreamCreate(&stream[i]);
+		if (error(err))		return 0.0;
+	}
+
+	int offset = 0;
 
 	cudaEventRecord(start);
 
 	for (int i = 0; i < CountStream; i++)
 	{
+		//количество строк изображения, обрабатываемых данным стримом
 		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
 		err = cudaMallocPitch(&dev_input[i], &input_pitch, (Width + 2 * sizeof(int)), height_count + 2);
-		err = cudaMemset2DAsync(dev_input[i], input_pitch, 0, (Width + 2 * sizeof(int)), height_count + 2, stream[i]);
+		if (error(err))		return 0.0;
+		//err = cudaMemset2DAsync(dev_input[i], input_pitch, 0, (Width + 2 * sizeof(int)), height_count + 2, stream[i]);
 		err = cudaMallocPitch(&dev_output[i], &res_pitch, Width, height_count);
+		if (error(err))		return 0.0;
+		//копируем часть изображения во входной массив для устройства с отступами
 		err = cudaMemcpy2DAsync(dev_input[i] + input_pitch + sizeof(int), input_pitch, input + stream_height*i*Width, Width, Width * sizeof(uint8_t), height_count, cudaMemcpyHostToDevice, stream[i]);
-		if (i > 0)
-		{
-			err = cudaMemcpy2DAsync(dev_input[i] + sizeof(int), input_pitch, input + stream_height*i * Width - Width, Width, Width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice, stream[i]);
-		}
-		if (i < CountStream - 1)
-		{
-			err = cudaMemcpy2DAsync(dev_input[i] + input_pitch + sizeof(int) + height_count*input_pitch, input_pitch, input + stream_height*(i + 1) *Width, Width, Width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice, stream[i]);
-		}
+		if (error(err))		return 0.0;
+		//вычисляем какую строку надо скопировать в верхний отступ и копируем
+		offset = i > 0 ? (stream_height*i - 1) * Width : 0;
+		err = cudaMemcpy2DAsync(dev_input[i] + sizeof(int), input_pitch, input + offset, Width, Width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice, stream[i]);
+		if (error(err))		return 0.0;
+		//вычисляем какую строку скопировать в нижний отступ и копируем
+		offset = i == CountStream - 1 ? Width*(height - 1) : stream_height*(i + 1) * Width;
+		err = cudaMemcpy2DAsync(dev_input[i] + input_pitch * (height_count + 1) + sizeof(int), input_pitch, input + offset, Width, Width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice, stream[i]);
+		if (error(err))		return 0.0;
 	}
-
-	int frame;
 
 	for (int i = 0; i < CountStream; i++)
 	{
 		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
 
 		dim3 threadsPerBlock(Xdim, Ydim);
-		dim3 numBlocks(ceil(((float)width + Xdim - 1) / Xdim / 4), ceil((float)height_count / Ydim));
-
-		frame = i == CountStream - 1 ? 1 : 0;
+		dim3 numBlocks(ceil(((float)width) / Xdim / 4), ceil((float)height_count / Ydim));
 
 		if (channels == 3)
 			cuda_color_processing << <numBlocks, threadsPerBlock,0,stream[i] >> > (reinterpret_cast<int*>(dev_input[i]), reinterpret_cast<int*>(dev_output[i]), width, height_count, input_pitch, res_pitch);
 		else
-			cuda_gray_processing << <numBlocks, threadsPerBlock,0,stream[i] >> > (reinterpret_cast<int*>(dev_input[i]), reinterpret_cast<int*>(dev_output[i]), width, height_count, input_pitch, res_pitch, frame);
+			cuda_gray_processing << <numBlocks, threadsPerBlock,0,stream[i] >> > (reinterpret_cast<int*>(dev_input[i]), reinterpret_cast<int*>(dev_output[i]), width, height_count, input_pitch, res_pitch);
 	}
 
 	for (int i = 0; i < CountStream; i++)
@@ -463,6 +537,7 @@ double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int wi
 double cpu_convert_image(uint8_t * input, uint8_t * result, unsigned int width, unsigned int height, unsigned int channels)
 {
 	float val;
+	int xCoord, yCoord;
 	LARGE_INTEGER start, finish, freq;
 	QueryPerformanceFrequency(&freq);
 	QueryPerformanceCounter(&start);
@@ -473,11 +548,14 @@ double cpu_convert_image(uint8_t * input, uint8_t * result, unsigned int width, 
 			val = 0;
 			for (int i = -1; i < 2; i++)
 			{
+				yCoord = y + i;
+				yCoord += yCoord < 0 ? 1 : yCoord >= height ? -1 : 0;
 				for (int j = -1; j < 2; j++)
 				{
-					if (x + j * channels < 0 || x + j * channels >= width*channels || y + i < 0 || y + i >= height)
-						continue;
-					val += input[(y + i)*width * channels + (x + j * channels)] * filter[i + 1][j + 1];
+					xCoord = x + j*channels;
+					xCoord += xCoord < 0 ? channels : xCoord >= width*channels ? channels*(-1) : 0;
+
+					val += input[yCoord*width * channels + xCoord] * filter[i + 1][j + 1];
 				}
 			}
 			val = round(val);
@@ -499,6 +577,7 @@ double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int
 	int data_size = width*height;
 
 	cudaError_t err = cudaSuccess;
+
 	size_t input_pitch;
 	size_t res_pitch;
 
@@ -512,15 +591,19 @@ double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int
 
 	for (int i = 0; i < channels; i++) {
 		cudaStreamCreate(&stream[i]);
+		if (error(err))		return 0.0;
 		cudaMallocHost((void**)&color[i], data_size);
+		if (error(err))		return 0.0;
 		cudaMallocHost((void**)&r_color[i], data_size);
+		if (error(err))		return 0.0;
 		cudaMallocPitch(&d_color[i], &input_pitch, width + 2 * sizeof(int), height + 2);
-		cudaMemset2DAsync(d_color[i], input_pitch, 0, width + 2 * sizeof(int), height + 2);
+		if (error(err))		return 0.0;
 		cudaMallocPitch(&d_r_color[i], &res_pitch, width, height);
+		if (error(err))		return 0.0;
 	}
 
 	dim3 threadsPerBlock(Xdim, Ydim);
-	dim3 numBlocks(ceil(((float)width + Xdim - 1) / Xdim / 4), ceil((height + Ydim - 1) / Ydim));
+	dim3 numBlocks(ceil(((float)width) / Xdim / 4), ceil(((float)height) / Ydim));
 	
 	cudaEvent_t begin, end;
 	cudaEventCreate(&begin);
@@ -543,6 +626,11 @@ double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int
 	for (int i = 0; i < channels; i++)
 	{
 		cudaMemcpy2DAsync(d_color[i] + input_pitch + sizeof(int), input_pitch, color[i], width, width * sizeof(uint8_t), height, cudaMemcpyHostToDevice, stream[i]);
+		if (error(err))		return 0.0;
+		cudaMemcpy2DAsync(d_color[i] +  sizeof(int), input_pitch, color[i], width, width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice, stream[i]);
+		if (error(err))		return 0.0;
+		cudaMemcpy2DAsync(d_color[i] + input_pitch*(height+1) + sizeof(int), input_pitch, color[i] + width* (height-1), width, width * sizeof(uint8_t), 1, cudaMemcpyHostToDevice, stream[i]);
+		if (error(err))		return 0.0;
 	}
 
 	for (int i = 0; i < channels; i++)
@@ -553,6 +641,7 @@ double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int
 	for(int i = 0; i <channels; i++)
 	{
 		cudaMemcpy2DAsync(r_color[i], width, d_r_color[i], res_pitch, width * sizeof(uint8_t), height, cudaMemcpyDeviceToHost, stream[i]);
+		if (error(err))		return 0.0;
 	}
 
 	cudaEventRecord(end);
@@ -569,7 +658,7 @@ double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int
 
 	QueryPerformanceCounter(&finish);
 
-	cout << "Cuda kernel time " << cuda_time << endl;
+	cout << "Cuda kernel time " << cuda_time << " ms" << endl;
 
 	for (int i = 0; i < channels; i++)
 	{
@@ -644,7 +733,7 @@ int image_processing_menu(const char* input_file, const char* cpu_result_file, c
 		}
 
 		uint8_t* gpu_image = memory_alloc(width*height, channels);
-		if (!gpu_convert_image)
+		if (!gpu_image)
 		{
 			cout << "Error in memory allocation" << endl;
 			free(input_image);
@@ -653,7 +742,7 @@ int image_processing_menu(const char* input_file, const char* cpu_result_file, c
 		}
 
 		cout << endl << "CPU processing" << endl;
-		cout << "CPU time " << cpu_convert_image(input_image, cpu_image, width, height, channels) << endl;
+		cout << "CPU time " << cpu_convert_image(input_image, cpu_image, width, height, channels) << " ms" << endl;
 
 		cout << endl << "Use cuda stream? 1-yes, 0-no" << endl;
 		choise = cin_int();
@@ -668,11 +757,11 @@ int image_processing_menu(const char* input_file, const char* cpu_result_file, c
 			cout << endl << "GPU processing" << endl;
 			cout << "Time " << (choise == 1 ?
 				cpu_and_gpu_convert_image(input_image, gpu_image, width, height, channels) :
-				gpu_stream_convert_image(input_image, gpu_image, width, height, channels)) << endl;
+				gpu_stream_convert_image(input_image, gpu_image, width, height, channels)) << " ms" << endl;
 		}
 		else {
 			cout << endl << "GPU processing" << endl;
-			cout << "GPU time " << gpu_convert_image(input_image, gpu_image, width, height, channels) << endl;
+			cout << "GPU time " << gpu_convert_image(input_image, gpu_image, width, height, channels) << " ms" << endl;
 		}
 
 		int result = equals(cpu_image, gpu_image, width, height, channels);
@@ -728,7 +817,7 @@ void change_filter()
 			for (int j = 0; j < 3; j++)
 			{
 				cout << "Enter the number" << endl;
-				filter[i][j] = cin_int(0, 0);
+				filter[i][j] = cin_float();
 			}
 
 	show_filter();
@@ -762,5 +851,6 @@ bool error(cudaError_t val)
 	if (!val)
 		return false;
 	cout << "Cuda Error " << cudaGetLastError() << endl;
+	cudaDeviceReset();
 	return true;
 }
