@@ -47,8 +47,7 @@ __device__ void gray_center_kernel(const int* input, int* result, const int widt
 	__syncthreads();
 
 	//заполнение граничных левых бит в блоках, обрабатывающих левую границу
-	//конфликт обращени€ к раздел€емой пам€ти 16 пор€дка
-	//чтобы избежать конфликта, можно запустить обращение в цикле, но что так, что так будем работать с €чейками каждой строки в отдельности
+	//конфликта обращени€ к раздел€емой пам€ти не должно быть, т.к. кажда€ нова€ строка смещаетс€ относительно предыдущей на 2 банка
 	if (blockIdx.x == 0 && threadIdx.x == 0)
 	{
 		buf[threadIdx.y][threadIdx.x] = buf[threadIdx.y][threadIdx.x + 1] << 24;
@@ -73,7 +72,7 @@ __device__ void gray_center_kernel(const int* input, int* result, const int widt
 		{
 			for (int j = -1; j < 2; j++)
 			{
-				sum += ((byte*)buf[bytePosY + i])[bytePosX + j] * d_filter[i + 1][j + 1];
+				sum += ((byte*)buf[bytePosY + i])[bytePosX + j] *d_filter[i + 1][j + 1];
 			}
 		}
 		sum = round(sum);
@@ -153,7 +152,7 @@ __device__ void gray_frame_kernel(const int* input, int* result, const int width
 		{
 			for (int j = -1; j < 2; j++)
 			{
-				sum += ((byte*)buf[bytePosY + i])[bytePosX + j] * d_filter[i + 1][j + 1];
+				sum += ((byte*)buf[bytePosY + i])[bytePosX + j] *d_filter[i + 1][j + 1];
 			}
 		}
 		sum = round(sum);
@@ -190,7 +189,7 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 	const int absY = blockIdx.y * blockDim.y + threadIdx.y;
 
 	__shared__ int buf[count_column][count_row];
-	//__shared__ int res[Ydim][Xdim*channels];
+	__shared__ int res[Ydim][Xdim];
 
 	//загрузка данны в раздел€емую пам€ть
 	//кажда€ нить загружает 3 раза по 1 int - транзакции
@@ -222,13 +221,14 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 	__syncthreads();
 
 	float sum;
-	int val;
+	//int val;
 	int bytePosY = threadIdx.y + 1;
 
 	//3 раза обрабатываем по 4 байта
 	for (int c = 0; c < channels; c++)
 	{
-		val = 0;
+		//val = 0;
+		res[threadIdx.y][threadIdx.x] = 0;
 
 
 		for (int k = 0; k < 4; k++)
@@ -247,13 +247,12 @@ __device__ void color_center_kernel(const int* input, int* result, const int wid
 			if (sum < 0) sum = 0;
 			if (sum > 255) sum = 255;
 
-			//((byte*)&(res[threadIdx.y][threadIdx.x + c*blockDim.x]))[k] = sum;
-			((byte*)&val)[k] = sum;
-			//bytePosX++;
+			((byte*)&(res[threadIdx.y][threadIdx.x]))[k] = sum;
+			//((byte*)&val)[k] = sum;
 		}
 
-		//result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = res[threadIdx.y][threadIdx.x + c*blockDim.x];
-		result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = val;
+		result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = res[threadIdx.y][threadIdx.x];
+		//result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = val;
 	}
 }
 
@@ -274,7 +273,7 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 	const int Height = heigth + 2;
 
 	__shared__ int buf[count_column][count_row];
-	//__shared__ int res[Ydim][Xdim*channels];
+	__shared__ int res[Ydim][Xdim];
 
 	//load data in shared memory
 
@@ -307,15 +306,15 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 	__syncthreads();
 
 	float sum;
-	int val;
+	//int val;
 	const int bytePosY = threadIdx.y + 1;
 	int offset;
 
 	for (int c = 0; c < channels; c++)
 	{
 
-		//res[threadIdx.y][threadIdx.x + c*blockDim.x] = 0;
-		val = 0;
+		res[threadIdx.y][threadIdx.x] = 0;
+		//val = 0;
 		
 
 		for (int k = 0; k < 4; k++)
@@ -340,14 +339,14 @@ __device__ void color_frame_kernel(const int* input, int* result, const int widt
 			if (sum < 0) sum = 0;
 			if (sum > 255) sum = 255;
 
-			//((byte*)&(res[threadIdx.y][threadIdx.x + c*blockDim.x]))[k] = sum;
-			((byte*)&val)[k] = sum;
-			//bytePosX++;
+			((byte*)&(res[threadIdx.y][threadIdx.x]))[k] = sum;
+			//((byte*)&val)[k] = sum;
 		}
 
 		if (absY < heigth && absXinByte + c * blockDimXinByte < width * channels)
 		{
-			result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = val;
+			//result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = val;
+			result[absY*res_pitch / sizeof(int) + absX + c*blockDim.x] = res[threadIdx.y][threadIdx.x];
 		}
 	}
 }

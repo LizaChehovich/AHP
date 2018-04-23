@@ -12,15 +12,18 @@ int equals(uint8_t * m1, uint8_t * m2, int width, int heigth, int channels)
 {
 	for (int i = 0; i < width*heigth*channels; i++)
 	{
-		if (m1[i] != m2[i])	
+		if (m1[i] != m2[i])
+		{
+			cout << (int)m1[i] << ", " << (int)m2[i] << endl;
 			return i;
+		}
 	}
 	return -1;
 }
 
 void choise_filter()
 {
-	float val = 0.12;
+	float val = 1.0/9;
 	const float filters[6][3][3] = {
 		{ { 0.0625,0.125,0.0625 },{ 0.125,0.25,0.125 },{ 0.0625,0.125,0.0625 } },
 		{ { val,val,val },{ val,val,val },{ val,val,val } },
