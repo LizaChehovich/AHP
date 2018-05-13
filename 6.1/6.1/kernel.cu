@@ -5,6 +5,8 @@
 #include <cmath>
 #include "cuda_profiler_api.h"
 
+typedef uint8_t byte;
+
 using namespace std;
 
 //запуск фильтрации изображения на устройстве
@@ -436,6 +438,10 @@ double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int wi
 
 	float time = 0;
 
+	int CountStream;
+	cout << "Count stream? min - 2, max - 19" << endl;
+	CountStream = cin_int(2, 19);
+
 	//высота части изображения, обрабатываемой одним потоком
 	int stream_height = ceil(((float)height) / Ydim / CountStream)*Ydim;
 	int Width = width*channels;
@@ -449,10 +455,10 @@ double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int wi
 
 	cudaError_t err = cudaSuccess;
 
-	cudaStream_t stream[CountStream];
+	cudaStream_t* stream = new cudaStream_t[CountStream];
 
-	uint8_t* dev_input[CountStream];
-	uint8_t* dev_output[CountStream];
+	uint8_t** dev_input = new uint8_t*[CountStream];
+	uint8_t** dev_output = new uint8_t*[CountStream];
 
 	//регистрируем входную и выходные матрицы как пиннед-память
 	err = cudaHostRegister(input, Width*height, cudaHostRegisterPortable);
@@ -540,7 +546,7 @@ double gpu_stream_convert_image(uint8_t* input, uint8_t* result, unsigned int wi
 
 double cpu_convert_image(uint8_t * input, uint8_t * result, unsigned int width, unsigned int height, unsigned int channels)
 {
-	float val;
+	/*float val;
 	int xCoord, yCoord;
 	LARGE_INTEGER start, finish, freq;
 	QueryPerformanceFrequency(&freq);
@@ -567,12 +573,13 @@ double cpu_convert_image(uint8_t * input, uint8_t * result, unsigned int width, 
 		}
 	}
 	QueryPerformanceCounter(&finish);
-	return (finish.QuadPart - start.QuadPart) * 1000 / (double)freq.QuadPart;
+	return (finish.QuadPart - start.QuadPart) * 1000 / (double)freq.QuadPart;*/
+	return 0.0;
 }
 
 double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int width, unsigned int height, unsigned int channels)
 {
-	if (channels == 1)
+	/*if (channels == 1)
 		return gpu_convert_image(input, result, width, height, channels);
 
 	cudaMemcpyToSymbol(d_filter, filter, 9 * sizeof(float), 0, cudaMemcpyHostToDevice);
@@ -608,7 +615,7 @@ double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int
 
 	dim3 threadsPerBlock(Xdim, Ydim);
 	dim3 numBlocks(ceil(((float)width) / Xdim / 4), ceil(((float)height) / Ydim));
-	
+
 	cudaEvent_t begin, end;
 	cudaEventCreate(&begin);
 	cudaEventCreate(&end);
@@ -676,8 +683,10 @@ double cpu_and_gpu_convert_image(uint8_t * input, uint8_t * result, unsigned int
 	cudaEventDestroy(begin);
 	cudaEventDestroy(end);
 
-	return (finish.QuadPart - start.QuadPart) * 1000 / (double)freq.QuadPart;
+	return (finish.QuadPart - start.QuadPart) * 1000 / (double)freq.QuadPart;*/
+	return 0.0;
 }
+
 
 int menu()
 {

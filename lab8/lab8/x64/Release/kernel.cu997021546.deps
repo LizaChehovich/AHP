@@ -327,6 +327,8 @@ c:\program files\nvidia gpu computing toolkit\cuda\v9.1\include\host_defines.h
 c:\program files\nvidia gpu computing toolkit\cuda\v9.1\include\crt/host_defines.h
 c:\program files\nvidia gpu computing toolkit\cuda\v9.1\include\device_launch_parameters.h
 c:\program files\nvidia gpu computing toolkit\cuda\v9.1\include\vector_types.h
+c:\users\liza\documents\github\ahp\lab8\lab8\kernel.h
+C:\Program Files (x86)\Windows Kits\10\Include\10.0.10240.0\ucrt\malloc.h
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\iostream
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\istream
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\ostream
@@ -347,7 +349,6 @@ C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\type_traits
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\xstddef
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\cstddef
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\initializer_list
-C:\Program Files (x86)\Windows Kits\10\Include\10.0.10240.0\ucrt\malloc.h
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\vcruntime_exception.h
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\eh.h
 C:\Program Files (x86)\Windows Kits\10\Include\10.0.10240.0\ucrt\corecrt_terminate.h
@@ -404,6 +405,6 @@ C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\xfacet
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\system_error
 C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\include\cerrno
 C:\Program Files (x86)\Windows Kits\10\Include\10.0.10240.0\ucrt\share.h
-c:\users\liza\documents\github\ahp\lab8\lab8\image_helper.h
+c:\users\liza\documents\github\ahp\lab8\lab8\constant.h
 C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v9.1\include\cuda_runtime.h
 C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v9.1\include\device_launch_parameters.h

@@ -1,42 +1,7 @@
-#include <iostream>
-#include "image_helper.h"
-#include <malloc.h>
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#include "kernel.h"
+#include "constant.h"
 
-//#include "mpi.h"
-
-typedef uint8_t byte;
-using namespace std;
-
-//фильтр
-float filter[3][3] = { { -1,-1,-1 },{ -1,9,-1 },{ -1,-1,-1 } };
-//фильтр для устройства
-__constant__ float d_filter[3][3];
-
-//минимальное значение пикселя
-#define MIN 0
-//максимальное значение пикселя
-#define MAX 255
-
-#define CountStreamPerDevice 3
-
-//размер блока по оси X
-#define Xdim 32
-//размер блока по оси Y
-#define Ydim 16
-
-int main_main();
-double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, unsigned int height, unsigned int channels);
-
-bool error(cudaError_t val)
-{
-	if (!val)
-		return false;
-	cout << "Cuda Error " << cudaGetLastError() << endl;
-	cudaDeviceReset();
-	return true;
-}
+bool error(cudaError_t val);
 
 __device__ void color_center_kernel(const int* input, int* result, const int width, const int heigth, const int pitch, const int res_pitch)
 {
@@ -182,60 +147,7 @@ __global__ void cuda_color_processing(const int* input, int* result, const int w
 		color_center_kernel(input, result, width, heigth, pitch, res_pitch);
 }
 
-
-int main(int argc, char* argv[])
-{
-	//MPI_Init(&argc, &argv);
-
-	const int res = main_main();
-
-	//MPI_Finalize();
-
-	return res;
-}
-
-int main_main()
-{
-	char input[] = "input.ppm";
-	char output[] = "output.ppm";
-
-	unsigned int width, height, channels;
-	byte* in_image = nullptr;
-
-	if (!load_ppm(input, &in_image, &width, &height, &channels))
-	{
-		cout << "Error in loading file" << endl;
-		return 1;
-	}
-
-	if (channels != 3)
-	{
-		cout << "Error in count channels" << endl;
-		free(in_image);
-		return 1;
-	}
-
-	byte* out_image = (byte*)malloc(width * height * sizeof(uint8_t) * channels);
-	if (!out_image)
-	{
-		cout << "Error in memory allocation" << endl;
-		free(in_image);
-		return 1;
-	}
-
-	gpu_stream_convert_image(in_image, out_image, width, height, channels);
-
-	if (!save_ppm(output, out_image, width, height, channels))
-	{
-		cout << "Error in save file" << endl;
-	}
-
-	free(in_image);
-	free(out_image);
-	return 0;
-}
-
-double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, unsigned int height, unsigned int channels)
+double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, unsigned int height, unsigned int channels, const int rank)
 {
 	cudaMemcpyToSymbol(d_filter, filter, 9 * sizeof(float), 0, cudaMemcpyHostToDevice);
 
@@ -247,7 +159,7 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 
 	//высота части изображения, обрабатываемой одним потоком
 	int stream_height = ceil(((float)height) / Ydim / countStream) * Ydim;
-	int Width = width * channels;
+	int Width = width * channels + 2 * sizeof(int);
 
 	size_t input_pitch;
 	size_t res_pitch;
@@ -261,7 +173,7 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 
 	//регистрируем входную и выходные матрицы как пиннед-память
 	err = cudaHostRegister(input, Width*height, cudaHostRegisterPortable);
-	err = cudaHostRegister(result, Width*height, cudaHostRegisterPortable);
+	err = cudaHostRegister(result, width*height*channels, cudaHostRegisterPortable);
 
 	int height_count;
 
@@ -269,49 +181,63 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 	{
 		err = cudaStreamCreate(&stream[i]);
 	}
-
-	int offset = 0;
-
-		for (int i = 0; i < countStream; i++)
+	
+	for (int i = 0; i < countStream; i++)
+	{
+		if (i%CountStreamPerDevice == 0)
+			cudaSetDevice(i / CountStreamPerDevice);
+		//количество строк изображения, обрабатываемых данным стримом
+		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
+		err = cudaMallocPitch(&dev_input[i], &input_pitch, Width, height_count + 2);
+		if (error(err))		return 0.0;
+		err = cudaMallocPitch(&dev_output[i], &res_pitch, width*channels, height_count);
+		if (error(err))		return 0.0;
+		//копируем часть изображения во входной массив для устройства
+		err = cudaMemcpy2DAsync(dev_input[i] + input_pitch, input_pitch, input + stream_height*i*Width, Width, Width * sizeof(byte), height_count, cudaMemcpyHostToDevice, stream[i]);
+		if (error(err))		return 0.0;
+		//вычисляем какую строку надо скопировать в верхний отступ и копируем
+		if (i > 0)
 		{
-			if (i%CountStreamPerDevice == 0)
-				cudaSetDevice(i / CountStreamPerDevice);
-			//количество строк изображения, обрабатываемых данным стримом
-			height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
-			err = cudaMallocPitch(&dev_input[i], &input_pitch, (Width + 2 * sizeof(int)), height_count + 2);
-			if (error(err))		return 0.0;
-			//err = cudaMemset2DAsync(dev_input[i], input_pitch, 0, (Width + 2 * sizeof(int)), height_count + 2, stream[i]);
-			err = cudaMallocPitch(&dev_output[i], &res_pitch, Width, height_count);
-			if (error(err))		return 0.0;
-			//копируем часть изображения во входной массив для устройства с отступами
-			err = cudaMemcpy2DAsync(dev_input[i] + input_pitch + sizeof(int), input_pitch, input + stream_height*i*Width, Width, Width * sizeof(byte), height_count, cudaMemcpyHostToDevice, stream[i]);
-			if (error(err))		return 0.0;
-			//вычисляем какую строку надо скопировать в верхний отступ и копируем
-			offset = i > 0 ? (stream_height*i - 1) * Width : 0;
-			err = cudaMemcpy2DAsync(dev_input[i] + sizeof(int), input_pitch, input + offset, Width, Width * sizeof(byte), 1, cudaMemcpyHostToDevice, stream[i]);
-			if (error(err))		return 0.0;
-			//вычисляем какую строку скопировать в нижний отступ и копируем
-			offset = i == countStream - 1 ? Width*(height - 1) : stream_height*(i + 1) * Width;
-			err = cudaMemcpy2DAsync(dev_input[i] + input_pitch * (height_count + 1) + sizeof(int), input_pitch, input + offset, Width, Width * sizeof(byte), 1, cudaMemcpyHostToDevice, stream[i]);
+			err = cudaMemcpy2DAsync(dev_input[i], input_pitch, input + (stream_height*i - 1) * Width, Width, Width * sizeof(byte), 1, cudaMemcpyHostToDevice, stream[i]);
 			if (error(err))		return 0.0;
 		}
-
-		for (int i = 0; i < countStream; i++)
+		else
 		{
-			if (i%CountStreamPerDevice == 0)
-				cudaSetDevice(i / CountStreamPerDevice);
-			height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
-			dim3 threadsPerBlock(Xdim, Ydim);
-			dim3 numBlocks(ceil(((float)width) / Xdim / 4), ceil((float)height_count / Ydim));
-			cuda_color_processing << <numBlocks, threadsPerBlock, 0, stream[i] >> > (reinterpret_cast<int*>(dev_input[i]), reinterpret_cast<int*>(dev_output[i]), width, height_count, input_pitch, res_pitch);
+			err = cudaMemset2DAsync(dev_input[i], input_pitch, 0, Width, 1, stream[i]);
+			if (error(err))		return 0.0;
 		}
+		//вычисляем какую строку скопировать в нижний отступ и копируем
+		if (i != countStream - 1)
+		{
+			err = cudaMemcpy2DAsync(dev_input[i] + input_pitch * (height_count + 1), input_pitch, input + stream_height*(i + 1) * Width, Width, Width * sizeof(byte), 1, cudaMemcpyHostToDevice, stream[i]);
+			if (error(err))		return 0.0;
+		}
+		else
+		{
+			err = cudaMemset2DAsync(dev_input[i] + input_pitch * (height_count + 1), input_pitch, 0, Width, 1, stream[i]);
+			if (error(err))		return 0.0;
+		}
+		//cout <<"input: " << rank << " " << i << " " << width << " " << stream_height << " " << stream_height*i* Width << endl;
+	}
 
 	for (int i = 0; i < countStream; i++)
 	{
 		if (i%CountStreamPerDevice == 0)
 			cudaSetDevice(i / CountStreamPerDevice);
 		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
-		err = cudaMemcpy2DAsync(result + stream_height*i*Width, Width, dev_output[i], res_pitch, Width * sizeof(byte), height_count, cudaMemcpyDeviceToHost, stream[i]);
+		dim3 threadsPerBlock(Xdim, Ydim);
+		dim3 numBlocks(ceil(((float)width) / Xdim / 4), ceil((float)height_count / Ydim));
+		cuda_color_processing << <numBlocks, threadsPerBlock, 0, stream[i] >> > (reinterpret_cast<int*>(dev_input[i]), reinterpret_cast<int*>(dev_output[i]), width, height_count, input_pitch, res_pitch);
+	}
+
+	for (int i = 0; i < countStream; i++)
+	{
+		if (i%CountStreamPerDevice == 0)
+			cudaSetDevice(i / CountStreamPerDevice);
+		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
+		err = cudaMemcpy2DAsync(result + stream_height*i*width*channels, width*channels, dev_output[i], res_pitch, width * channels * sizeof(byte), height_count, cudaMemcpyDeviceToHost, stream[i]);
+
+		//cout << "output: " << rank << " " << i << " " << stream_height*i*width*channels << endl;
 	}
 
 	for (int i = 0; i < countStream; i++)
@@ -325,5 +251,14 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 
 	err = cudaHostUnregister(result);
 	if (error(err))		return 0.0;
-	return time;
+	return 0.0;
+}
+
+bool error(cudaError_t val)
+{
+	if (!val)
+		return false;
+	cout << "Cuda Error " << cudaGetLastError() << endl;
+	cudaDeviceReset();
+	return true;
 }
