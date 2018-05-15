@@ -12,7 +12,7 @@ __constant__ float d_filter[3][3];
 //максимальное значение пикселя
 #define MAX 255
 
-#define CountStreamPerDevice 5
+#define CountStreamPerDevice 3
 
 //размер блока по оси X
 #define Xdim 32

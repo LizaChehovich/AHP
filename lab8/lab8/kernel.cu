@@ -151,8 +151,6 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 {
 	cudaMemcpyToSymbol(d_filter, filter, 9 * sizeof(float), 0, cudaMemcpyHostToDevice);
 
-	float time = 0;
-
 	int countDevice;
 	cudaGetDeviceCount(&countDevice);
 	const int countStream = CountStreamPerDevice * countDevice;
@@ -179,13 +177,16 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 
 	for (int i = 0; i < countStream; i++)
 	{
+		if (i%CountStreamPerDevice == 0)
+			cudaSetDevice((i / CountStreamPerDevice) * 2);
+
 		err = cudaStreamCreate(&stream[i]);
 	}
 	
 	for (int i = 0; i < countStream; i++)
 	{
 		if (i%CountStreamPerDevice == 0)
-			cudaSetDevice(i / CountStreamPerDevice);
+			cudaSetDevice((i / CountStreamPerDevice) * 2);
 		//количество строк изображения, обрабатываемых данным стримом
 		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
 		err = cudaMallocPitch(&dev_input[i], &input_pitch, Width, height_count + 2);
@@ -223,7 +224,7 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 	for (int i = 0; i < countStream; i++)
 	{
 		if (i%CountStreamPerDevice == 0)
-			cudaSetDevice(i / CountStreamPerDevice);
+			cudaSetDevice((i / CountStreamPerDevice) * 2);
 		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
 		dim3 threadsPerBlock(Xdim, Ydim);
 		dim3 numBlocks(ceil(((float)width) / Xdim / 4), ceil((float)height_count / Ydim));
@@ -233,7 +234,7 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 	for (int i = 0; i < countStream; i++)
 	{
 		if (i%CountStreamPerDevice == 0)
-			cudaSetDevice(i / CountStreamPerDevice);
+			cudaSetDevice((i / CountStreamPerDevice) * 2);
 		height_count = (height > stream_height*(i + 1)) ? stream_height : height - stream_height*i;
 		err = cudaMemcpy2DAsync(result + stream_height*i*width*channels, width*channels, dev_output[i], res_pitch, width * channels * sizeof(byte), height_count, cudaMemcpyDeviceToHost, stream[i]);
 
@@ -242,8 +243,11 @@ double gpu_stream_convert_image(byte* input, byte* result, unsigned int width, u
 
 	for (int i = 0; i < countStream; i++)
 	{
+		if (i%CountStreamPerDevice == 0)
+			cudaSetDevice((i / CountStreamPerDevice) * 2);
 		cudaFree(dev_input[i]);
 		cudaFree(dev_output[i]);
+		cudaStreamDestroy(stream[i]);
 	}
 
 	err = cudaHostUnregister(input);

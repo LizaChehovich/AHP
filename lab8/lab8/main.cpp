@@ -100,6 +100,10 @@ bool load_part(const char * file, byte ** data, unsigned int * w, unsigned int *
 		ptr += sizeof(int);
 		w_add -= sizeof(int);
 	}
+	if (rank == get_world_size() - 1)
+	{
+		w_add -= sizeof(int);
+	}
 
 	for (int i = 0; i < h_full; i++)
 	{
