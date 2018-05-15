@@ -1,0 +1,74 @@
+/usr/lib64/openmpi/bin:/usr/local/bin:/usr/lib64/mpi/gcc/openmpi/bin:/opt/cuda/bin:/home/shared/evm/stud/s5500/u5501/bin:/usr/local/bin:/usr/bin:/bin:/usr/bin/X11:/usr/games
+/usr/lib64/openmpi/lib64:/usr/local/lib64/:/opt/cuda/lib64:$LD_LIBRARY_PATH:/usr/lib64/openmpi/lib64
+nodes: /var/spool/torque/aux//7143.cluster.lhpc.bsuir.by
+ibnode05.lhpc.bsuir.by
+ibnode05.lhpc.bsuir.by
+ibnode05.lhpc.bsuir.by
+ibnode05.lhpc.bsuir.by
+ibnode05.lhpc.bsuir.by
+file_load
+4, 6004, 4558, 24014
+2, 6008, 4558, 12014
+0, 6004, 4558, 18
+3, 6008, 4558, 18014
+1, 6008, 4558, 6014
+input: 4 0 2000 768 0
+input: 4 1 2000 768 768
+input: 4 2 2000 768 1536
+input: 4 3 2000 768 2304
+input: 1 0 2000 768 0
+input: 3 0 2000 768 0
+input: 4 4 2000 768 3072
+input: 1 1 2000 768 768
+input: 3 1 2000 768 768
+input: 4 5 2000 768 3840
+input: 0 0 2000 768 0
+output: 4 0 0
+output: 4 1 768
+output: 4 2 1536
+output: 4 3 2304
+output: 4 4 3072
+output: 4 5 3840
+input: 2 0 2000 768 0
+input: 1 2 2000 768 1536
+input: 3 2 2000 768 1536
+input: 0 1 2000 768 768
+input: 2 1 2000 768 768
+input: 1 3 2000 768 2304
+input: 3 3 2000 768 2304
+input: 0 2 2000 768 1536
+input: 2 2 2000 768 1536
+input: 1 4 2000 768 3072
+input: 3 4 2000 768 3072
+input: 0 3 2000 768 2304
+input: 2 3 2000 768 2304
+input: 1 5 2000 768 3840
+output: 1 0 0
+output: 1 1 768
+output: 1 2 1536
+output: 1 3 2304
+output: 1 4 3072
+output: 1 5 3840
+input: 3 5 2000 768 3840
+input: 0 4 2000 768 3072
+output: 3 0 0
+output: 3 1 768
+output: 3 2 1536
+output: 3 3 2304
+output: 3 4 3072
+input: 2 4 2000 768 3072
+output: 3 5 3840
+input: 0 5 2000 768 3840
+input: 2 5 2000 768 3840
+output: 0 0 0
+output: 2 0 0
+output: 2 1 768
+output: 2 2 1536
+output: 2 3 2304
+output: 2 4 3072
+output: 2 5 3840
+output: 0 1 768
+output: 0 2 1536
+output: 0 3 2304
+output: 0 4 3072
+output: 0 5 3840
